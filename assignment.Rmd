@@ -1,0 +1,97 @@
+---
+title: "Moloco Data Assignment"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Data loading
+```{r echo=FALSE}
+library(readr)
+library(data.table)
+library(RCurl)
+library(ggplot2)
+library(plotly)
+library(caret)
+library(lmtest)
+library(e1071)
+
+data <- data.table(read_csv("~/Downloads/Q3-data.csv"))
+```
+
+For ease of use, I downloaded and converted the data to CSV as it preserves the shape and properties of the data. I chose to use the `data.table` library to do all my operations as it provides a simple interface to access data and for large datasets is massively parallel
+
+## Part 1
+```{r}
+cbdv <- data[country_id == 'BDV']
+ans = unique(
+  (
+    as.data.table(cbdv)[, count := uniqueN(user_id), by = site_id]
+    )[, c('site_id', 'count'), with = FALSE]
+  )[order(-count)]
+print(ans)
+```
+
+This code actually forms the base for most of the assignment. First we filter by country - we could do this inline, but it is easier to read this way - then we simply group by `site_id` and count the number of unique `user_id`s we have. We then clean up the result by dropping everything except our `site_id` and `count`. After removing duplicates, due to how the grouping in `data.table` works, and ordering by count, we print the result.
+
+## Part 2
+```{r}
+tdat <- data[between(ts, as.POSIXct("2019-02-03 00:00:00", tz="UTC"), as.POSIXct("2019-02-04 23:59:59", tz="UTC"))]
+ans2 = ((as.data.table(tdat)[, .(`number of visits` = .N), by = list(user_id, site_id)])[`number of visits` > 10])[order(-`number of visits`)]
+print(ans2)
+```
+
+We again follow the same pattern, beginning by filtering. Here it is noticeable that the initial filter on a seperate line is useful because it is quite cumbersome with its `between` statement. After this, it is a simple matter of grouping on multiple columns: both `user_id` and `site_id`, and counting how many of those rows there are. `data.table` gives us a simple interface to do this. Finally, we filter by `number of visits`, order by visits, and print.
+
+## Part 3
+```{r}
+udat <- data[, .SD[which.max(ts)], by=user_id]
+ans3 <- unique(
+  (
+    as.data.table(udat)[ , count := uniqueN(user_id), by = site_id]
+    )[, c('site_id', 'count'), with = FALSE]
+  )[order(-count)]
+print(ans3)
+```
+
+To find the last visited site, we can use a little trick and simply get the maximum timestamp for each user, which is what the `.SD` in `data.table` lets us do. By creating that first filter, we are able to reuse the code from Part 1 to do our group, cleanup, and ordering to then get our result.
+
+## Part 4
+```{r}
+udatFirst <- data[, .SD[which.min(ts)], by=user_id][, c('site_id', 'user_id'), with = FALSE]
+udatLast <- data[, .SD[which.max(ts)], by=user_id][, c('site_id', 'user_id'), with = FALSE]
+count <- nrow(merge(udatFirst, udatLast))
+print(count)
+```
+
+Here we use a little trick of `data.table`. First we use the code from part 3 to get both the minimum and maximum timestamp for each user. This is the same as their first and last visit. What we can do next is merge the resultant tables. The key here is that in its default behavior, `data.table` will keep rows that exist in both tables, essentially the users who's first and last visit was the same site. This is much more efficient than looping over both tables because table merges can be done in parallel, rather than a linear scan. Finally, we just count the number of rows in our merge, and print the result.
+
+## Part 5
+```{r}
+data = read_csv("regression.csv")
+names(data) = c("A", "B", "C")
+reg_model = lm(C~A + B, data = data)
+summary(reg_model)
+plot(reg_model)
+```
+
+```{r}
+data <- read_csv("regression.csv", col_names = FALSE)
+plot(data)
+data_clean <- data[-c(201), ]
+data_clean <- data_clean[-c(209, 75), ]
+plot(data_clean)
+adj_factor <- abs(min(data_clean$X3)) + abs(mean(data_clean$X3))
+data_clean$X3 <- data_clean$X3 + adj_factor
+x3BC <- caret::BoxCoxTrans(data_clean$X3)
+print(x3BC)
+data_adj <- cbind(data_clean, X3_new=predict(x3BC, data_clean$X3))
+plot(data_adj)
+reg_adj <- lm(X3_new ~ poly(X1, 3) +  poly(X2, 3) , data=data_adj)
+plot(reg_adj)
+summary(reg_adj)
+```
+We first load the data and remove outlying data points through visual inspection. This is possible because there are just a few points, but in a larger data set, we could have to cull using conditionals. From viewing the dataset, we can clearly see a polynomial relationship. Without doing complex iterative regressions, we can estimate that this is a cubic regression in both X and Y. In addtion to this, we can see the scale of our response variable is orders of magnitude from out X and Y axes. To account
+for this, we can do a Box-Cox transformation to try and adjust for this.
+
+Before we do that, we must adjust our response variable so it is above zero, and then apply the Box-Cox Lambda transform. After this we can create our polynomial regression and get our results. Here we can see that we obtain a decent R2 value of 0.5454, indicating that our regression is decent at predicting our data points after a transformation.
